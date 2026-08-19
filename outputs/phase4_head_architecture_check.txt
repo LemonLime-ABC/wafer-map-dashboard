@@ -1,0 +1,17 @@
+=== GAP vs Flatten head 비교 (2-Fold x 15epoch, raw 입력) ===
+클래스                gap     flatten   차이(flatten-gap)
+Center          0.7668      0.9312           +0.1644 <- 가설이 지목한 클래스
+Donut           0.6791      0.9018           +0.2226 <- 가설이 지목한 클래스
+Edge-Loc        0.6936      0.8214           +0.1278
+Edge-Ring       0.9201      0.9657           +0.0456
+Loc             0.5244      0.7047           +0.1803 <- 가설이 지목한 클래스
+Near-full       0.8433      0.8490           +0.0057
+Random          0.8526      0.9045           +0.0519
+Scratch         0.5244      0.5261           +0.0017 <- 가설이 지목한 클래스
+none            0.8156      0.8386           +0.0229
+
+전체(macro)       0.7356      0.8270           +0.0914
+
+가설 지목 클래스(Center/Loc/Scratch/Donut) 평균: gap=0.6237 -> flatten=0.7660 (+0.1423)
+
+-> 전체 macro-F1 기준 더 나은 head: flatten

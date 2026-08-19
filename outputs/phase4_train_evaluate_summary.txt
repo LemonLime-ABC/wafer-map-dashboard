@@ -1,0 +1,46 @@
+
+[3] === 최종 성능 (교차검증 OOF 예측 기준) ===
+macro-F1        : 0.7691  <- 주 지표
+balanced accuracy: 0.7806  <- 주 지표
+accuracy         : 0.7595  <- 참고용. None이 없는 균형 샘플이라 SECOM만큼 함정은 아니지만 클래스별 편차를 가릴 수 있으니 macro-F1을 우선한다
+
+--- 클래스별 정밀도/재현율/F1 ---
+              precision    recall  f1-score   support
+
+      Center      0.933     0.612     0.739      2000
+       Donut      0.627     0.778     0.695       555
+    Edge-Loc      0.710     0.798     0.751      2000
+   Edge-Ring      0.978     0.939     0.958      2000
+         Loc      0.552     0.669     0.605      2000
+   Near-full      0.807     0.980     0.885       149
+      Random      0.935     0.845     0.888       866
+     Scratch      0.570     0.570     0.570      1193
+        none      0.829     0.835     0.832      2000
+
+    accuracy                          0.760     12763
+   macro avg      0.771     0.781     0.769     12763
+weighted avg      0.781     0.760     0.763     12763
+
+
+--- fold별 최고 val macro-F1 (안정성 확인용) ---
+  fold 1: 0.7905 (27epoch)
+  fold 2: 0.8045 (17epoch)
+  fold 3: 0.7828 (19epoch)
+  fold 4: 0.7332 (14epoch)
+  fold 5: 0.7200 (11epoch)
+
+--- 9x9 혼동 행렬 (행=실제, 열=예측) ---
+실제\예측        Center    Donut Edge-Loc Edge-Rin      Loc Near-ful   Random  Scratch     none
+Center         1223       76       88        2      490        1        6       58       56
+Donut             3      432        4        1       82        5       12       16        0
+Edge-Loc          9       13     1596       30      150        4       22      100       76
+Edge-Ring         0        0      108     1877        0        0        1       12        2
+Loc              50      102      214        0     1338        2        6      209       79
+Near-full         0        0        1        0        2      146        0        0        0
+Random            5       33       35        2       36       23      732        0        0
+Scratch          14       33       89        6      238        0        2      680      131
+none              7        0      113        1       89        0        2      118     1670
+
+--- Edge-Loc <-> Scratch 혼동 (CLAUDE.md 7.1절 핵심 논점) ---
+Edge-Loc를 Scratch로 오분류: 100/2000 (5.0%)
+Scratch를 Edge-Loc로 오분류: 89/1193 (7.5%)

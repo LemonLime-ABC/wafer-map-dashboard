@@ -1,0 +1,13 @@
+# 원본 데이터(2GB) — GitHub에 올리기엔 너무 크고, 배포된 앱은 이 파일을 안 쓴다
+# (app.py는 artifacts/*.joblib, artifacts/*.pt만 읽음)
+data/LSWMD.pkl
+data/*.pkl
+data/processed/
+
+# 파이썬 캐시
+__pycache__/
+*.pyc
+
+# OS/에디터
+.DS_Store
+src/run_log.txt

@@ -1,0 +1,3 @@
+raw macro-F1: 0.5785
+onehot macro-F1: 0.3798
+결론: raw

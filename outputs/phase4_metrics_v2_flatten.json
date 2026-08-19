@@ -1,0 +1,19 @@
+{
+  "input_mode": "raw",
+  "head": "flatten",
+  "n_folds": 5,
+  "oof_macro_f1": 0.8727969684235468,
+  "oof_balanced_accuracy": 0.8778706391512575,
+  "oof_accuracy": 0.8665674214526365,
+  "class_names": [
+    "Center",
+    "Donut",
+    "Edge-Loc",
+    "Edge-Ring",
+    "Loc",
+    "Near-full",
+    "Random",
+    "Scratch",
+    "none"
+  ]
+}
