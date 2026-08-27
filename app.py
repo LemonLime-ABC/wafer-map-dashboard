@@ -51,6 +51,9 @@ gradcam = load_all()[2]
 class_names = bundle["class_names"]
 wafer_table = bundle["wafer_table"]
 X_val0 = bundle["X_val0"]
+# 9개 클래스 전체 확률. 예전 번들에는 이 키가 없으므로 .get()으로 안전하게 꺼낸다
+# (없으면 None이 되고, 화면 1에서 해당 그래프만 건너뛴다).
+probs_all = bundle.get("probs_all")
 cm = bundle["cm"]
 per_class_df = bundle["per_class_df"]
 overall = bundle["overall_metrics"]
@@ -171,6 +174,77 @@ if page == PAGES[0]:
         "육안으로 같이 확인하는 것이 좋습니다 — 예: Donut/Scratch는 형태를 "
         "잘 따라가지만, Center/Edge-Ring은 지표상 통제군보다 약합니다."
     )
+
+    # ---- 9개 클래스 전체 확률 ----
+    # 최댓값 하나만 보면 "0.99로 확신한 예측"과 "0.35 vs 0.33으로 간신히
+    # 이긴 예측"이 구분되지 않는다. 실무에서 이 둘은 신뢰도가 전혀 다르므로
+    # 2등 이하까지 전부 보여준다.
+    if probs_all is not None:
+        st.divider()
+        st.markdown("##### 9개 클래스 전체 예측 확률")
+
+        p = probs_all[local_pos]
+        order = np.argsort(p)[::-1]          # 확률 높은 순으로 정렬
+        names_sorted = [class_names[i] for i in order]
+        vals_sorted = p[order]
+
+        true_lab, pred_lab = row["true_label"], row["pred_label"]
+        # 색으로 역할을 구분한다: 예측한 것(빨강) / 실제 정답(초록) / 나머지(회색).
+        # 맞힌 경우엔 둘이 같은 막대이므로 빨강 하나만 보인다.
+        bar_colors = []
+        for nm in names_sorted:
+            if nm == pred_lab:
+                bar_colors.append("#c44e52")
+            elif nm == true_lab:
+                bar_colors.append("#55a868")
+            else:
+                bar_colors.append("#c9ccd1")
+
+        fig_p = go.Figure(go.Bar(
+            x=names_sorted, y=vals_sorted, marker_color=bar_colors,
+            text=[f"{v*100:.1f}%" if v >= 0.001 else "<0.1%" for v in vals_sorted],
+            textposition="outside", cliponaxis=False,
+        ))
+        fig_p.update_layout(
+            height=300, margin=dict(l=10, r=10, t=10, b=10),
+            yaxis=dict(title="확률", range=[0, 1.15], tickformat=".0%"),
+            xaxis=dict(title=None),
+        )
+        st.plotly_chart(fig_p, width='stretch')
+
+        # 1등과 2등의 격차 = 모델이 얼마나 확신했는가.
+        # 이 임계값(20%p)이 실제로 의미가 있는지는 검증셋 전체로 확인할 수 있다.
+        # (하드코딩하면 나중에 모델이 바뀔 때 조용히 거짓말이 되므로 매번 계산한다)
+        gap = vals_sorted[0] - vals_sorted[1]
+        srt = np.sort(probs_all, axis=1)[:, ::-1]
+        gaps_all = srt[:, 0] - srt[:, 1]
+        narrow = gaps_all < 0.20
+        wrong = ~wafer_table["correct"].values
+        err_narrow = wrong[narrow].mean()
+        err_wide = wrong[~narrow].mean()
+
+        msg = (f"1등 **{names_sorted[0]}** {vals_sorted[0]*100:.1f}% · "
+               f"2등 **{names_sorted[1]}** {vals_sorted[1]*100:.1f}% · "
+               f"격차 **{gap*100:.1f}%p**")
+        if gap < 0.20:
+            st.warning(msg + " — 격차가 좁습니다. 모델이 두 패턴 사이에서 망설인 사례로, "
+                             "사람이 재확인할 가치가 있습니다.")
+        else:
+            st.info(msg)
+
+        st.caption(
+            "빨강=모델이 예측한 클래스, 초록=실제 라벨, 회색=나머지. "
+            "9개 확률의 합은 항상 1입니다(softmax). "
+            "정확도만 보면 맞고 틀림밖에 안 보이지만, 이 분포를 보면 "
+            "**모델이 무엇과 헷갈렸는지**까지 알 수 있습니다."
+        )
+        st.caption(
+            f"이 검증셋({len(wafer_table):,}장)에서 **1-2등 격차가 20%p 미만인 웨이퍼는 "
+            f"{int(narrow.sum())}장이고, 그중 {err_narrow*100:.1f}%가 오분류**입니다 — "
+            f"격차가 20%p 이상인 웨이퍼의 오분류율 {err_wide*100:.1f}%의 "
+            f"약 {err_narrow/err_wide:.0f}배입니다. 즉 확률 분포의 격차는 "
+            "'이 예측을 사람이 다시 봐야 하는가'를 실제로 가려냅니다."
+        )
 
 # ============================================
 # 화면 2: 패턴별 성능

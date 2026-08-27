@@ -67,6 +67,14 @@ wafer_table = pd.DataFrame({
     "pred_prob": probs.max(axis=1),
     "correct": class_names[y_encoded[val_idx0]] == class_names[pred_idx],
 })
+
+# 화면 1에서 "1등 말고 나머지 8개 클래스는 몇 %로 봤는가"까지 보여주기 위해
+# 최댓값만이 아니라 9개 클래스 확률을 전부 보관한다. 최댓값 하나만 보면
+# "0.99로 확신"인지 "0.35 vs 0.33으로 간신히 이김"인지 구분이 안 되는데,
+# 이 둘은 실무에서 신뢰도가 전혀 다르다.
+probs_all = probs.astype(np.float32)  # (검증셋 장수, 9)
+print(f"    전체 확률 배열 보관: {probs_all.shape} "
+      f"(행별 합계 검증: {probs_all.sum(axis=1).min():.4f}~{probs_all.sum(axis=1).max():.4f})")
 print(f"[1] fold 0 검증셋 {len(wafer_table):,}장 예측 완료 "
       f"(정확도 {wafer_table['correct'].mean():.3f})")
 
@@ -133,6 +141,7 @@ with open(OUTPUT_DIR / "phase4_metrics.json", encoding="utf-8") as f:
 bundle = {
     "class_names": class_names,
     "wafer_table": wafer_table,        # 화면 1
+    "probs_all": probs_all,            # 화면 1 (9개 클래스 전체 확률)
     "X_val0": X_raw[val_idx0],         # 화면 1 (원본 64x64 이미지, uint8)
     "cm": cm,                          # 화면 2
     "per_class_df": per_class_df,      # 화면 2
