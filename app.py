@@ -27,7 +27,16 @@ from gradcam import GradCAM  # noqa: E402
 
 ART = os.path.join(BASE, "artifacts")
 
-st.set_page_config(page_title="웨이퍼 맵 불량 패턴 분류 대시보드", layout="wide")
+# page_icon은 브라우저 탭 아이콘이자, 폰에서 "홈 화면에 추가"했을 때의
+# 홈 화면 아이콘이 된다. 지정하지 않으면 Streamlit 기본 아이콘이 떠서
+# 홈 화면에서 우리 앱인지 구분되지 않는다.
+# (src/10_make_app_icon.py가 실제 Edge-Ring 웨이퍼 맵으로 생성)
+_ICON = os.path.join(BASE, "assets", "app_icon.png")
+st.set_page_config(
+    page_title="웨이퍼 맵 불량 패턴 분류",
+    page_icon=_ICON if os.path.exists(_ICON) else "🔬",
+    layout="wide",
+)
 
 # --------------------------------------------
 # 데이터·모델 로드 (캐시)
