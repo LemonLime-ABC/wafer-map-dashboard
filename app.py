@@ -63,6 +63,10 @@ X_val0 = bundle["X_val0"]
 # 9개 클래스 전체 확률. 예전 번들에는 이 키가 없으므로 .get()으로 안전하게 꺼낸다
 # (없으면 None이 되고, 화면 1에서 해당 그래프만 건너뛴다).
 probs_all = bundle.get("probs_all")
+# Lot 응집도(화면 3). 예전 번들에는 없는 키이므로 .get()으로 안전하게 꺼내고,
+# 없으면 해당 섹션만 건너뛴다.
+lot_pattern_df = bundle.get("lot_pattern_df")
+lot_summary = bundle.get("lot_summary")
 cm = bundle["cm"]
 per_class_df = bundle["per_class_df"]
 overall = bundle["overall_metrics"]
@@ -360,6 +364,86 @@ elif page == PAGES[2]:
             "우연히 뭉쳐 있어 생긴 착시였지, 실제 생산 이상이 아니었습니다. "
             "발견 즉시 Test 라벨만 남기고 다시 계산했습니다."
         )
+
+    # ------------------------------------------------------------
+    # Lot 응집도 — "같은 Lot이면 같은 불량이 나오는가"
+    # Lot은 같은 카세트로 같은 공정 경로를 함께 통과한 묶음이므로,
+    # 원인이 '공정 조건'이면 Lot 전체가 같이 영향받아 뭉쳐야 하고,
+    # '웨이퍼 개별 확률 사건'이면 뭉치지 않아야 한다. 그 차이를 측정한다.
+    # ------------------------------------------------------------
+    if lot_summary is not None and lot_pattern_df is not None:
+        st.divider()
+        st.subheader("같은 Lot의 웨이퍼는 같은 불량 양상을 보이는가")
+        st.caption(
+            "Lot은 같은 카세트로 **같은 공정 경로를 함께 통과한** 묶음입니다. "
+            "원인이 공정 조건이면 Lot 전체가 같이 영향을 받아 패턴이 뭉쳐야 하고, "
+            "웨이퍼 한 장 단위의 확률 사건(파티클 낙하 등)이면 뭉치지 않아야 합니다."
+        )
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("실제 일치율", f"{lot_summary['observed']:.2f}%")
+        m2.metric("통제군(무작위)", f"{lot_summary['control']:.2f}%")
+        m3.metric("배율", f"{lot_summary['lift']:.2f}x")
+        m4.metric("Z", f"+{lot_summary['z']:.1f}")
+        st.caption(
+            f"Test 라벨 · none 제외 조건 · 웨이퍼 {lot_summary['wafers']:,}장 / "
+            f"비교 쌍 {lot_summary['pairs']:,}개. "
+            "**통제군**은 라벨을 전체에서 무작위로 섞어 Lot 구조를 파괴한 뒤 "
+            "같은 계산을 한 값(20회 평균)입니다 — 'Lot이 아무 의미 없었다면 나왔을 값'이며, "
+            "이것보다 높아야만 '뭉친다'고 말할 수 있습니다."
+        )
+
+        st.markdown("##### 패턴별 응집도")
+        lp = lot_pattern_df.sort_values("실제(%)", ascending=False)
+        fig_lot = go.Figure()
+        fig_lot.add_trace(go.Bar(
+            x=lp["패턴"], y=lp["실제(%)"], name="실제 일치율",
+            marker_color="#c44e52",
+            text=[f"{v:.1f}%" for v in lp["실제(%)"]], textposition="outside"))
+        fig_lot.add_trace(go.Bar(
+            x=lp["패턴"], y=lp["통제군(%)"], name="통제군(무작위)",
+            marker_color="#c9ccd1"))
+        fig_lot.update_layout(
+            barmode="group", height=380,
+            margin=dict(l=10, r=10, t=10, b=10),
+            yaxis=dict(title="같은 Lot의 다른 불량 웨이퍼도 같은 패턴일 확률 (%)",
+                       range=[0, 95]),
+            legend=dict(orientation="h", y=1.12, x=0))
+        st.plotly_chart(fig_lot, width='stretch')
+
+        show = lp.copy()
+        show["배율"] = show["배율"].map(lambda v: f"{v:.2f}x")
+        for c in ("실제(%)", "통제군(%)"):
+            show[c] = show[c].map(lambda v: f"{v:.2f}")
+        st.dataframe(show, width='stretch', hide_index=True)
+
+        st.markdown(
+            "**읽는 법** — Edge-Ring(8.35x)·Center(7.70x)처럼 **Lot 전체에 걸리는 "
+            "공정 조건**(RTP 온도 프로파일, CD 불균일)이 원인으로 추정되는 패턴은 강하게 "
+            "뭉칩니다. 반대로 Edge-Loc(1.84x)·Loc(1.82x)·Scratch(2.07x)는 8개 패턴 중 "
+            "**응집도가 가장 낮습니다** — 파티클 낙하나 핸들링 접촉은 웨이퍼 한 장 단위의 "
+            "확률 사건이라 Lot 전체에 걸리지 않는다는 가설과 맞습니다."
+        )
+
+        with st.expander("이 분석의 한계 (반드시 함께 읽을 것)"):
+            st.markdown(
+                "- **인과가 아닙니다.** 설비ID·레시피·타임스탬프가 없어 "
+                "'공정 조건이 원인'을 증명하지 못합니다. "
+                "'같은 Lot이면 패턴이 비슷하다'는 통계적 연관까지만 말할 수 있습니다.\n"
+                "- **라벨링 절차 자체가 교란일 수 있습니다.** 원 연구자가 Lot 단위로 "
+                "몰아 보며 라벨링했다면 일치율이 인위적으로 오릅니다. Lot당 라벨 수 "
+                "중앙값이 23/25장이라 'Lot 통째 라벨링'에 가까운 정황이 실제로 있고, "
+                "**배제할 방법이 없습니다.**\n"
+                "- **Random(22.25x)은 위 설명에 맞지 않습니다.** 파티클 계열로 분류했는데 "
+                "강하게 뭉칩니다. 지속적 오염(필터 열화 등)이면 설명은 되지만 확인 불가라, "
+                "**가설과 어긋나는 관찰로 그대로 기록합니다.**\n"
+                "- **Donut(436쌍)·Near-full(259쌍)은 표본이 작습니다.**\n"
+                "- **배율과 절대값은 순위가 다릅니다.** 배율은 희귀한 패턴일수록 기계적으로 "
+                "커집니다(Random이 배율 1위인 이유). '얼마나 뭉치는가'는 절대값으로, "
+                "'우연이 아닌가'는 배율로 봐야 합니다.\n"
+                "- **Training 라벨을 포함하면 92.73%**로 부풀려집니다(Test만 쓰면 65.52%). "
+                "위 SPC 관리도에서 겪은 것과 **같은 함정이 두 번째로 재발**한 사례입니다."
+            )
 
 # ============================================
 # 화면 4: 공정 원인 매핑

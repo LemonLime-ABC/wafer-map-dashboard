@@ -115,6 +115,39 @@ contribution_df = pd.read_csv(OUTPUT_DIR / "phase6_yield_contribution.csv")
 print("[3] Phase 6 산출물 로드 완료")
 
 # %% [markdown]
+# ## 3b. Phase 8 Lot 응집도 — "같은 Lot이면 같은 불량이 나오는가"
+#
+# 화면 3(Lot 수율 모니터링)에 올릴 데이터다. Test 라벨 + none 제외 조건(D)만
+# 쓴다 — Training 라벨을 섞으면 원 연구자가 학습셋을 균형 있게 뽑느라
+# 생긴 인위적 뭉침이 결과를 부풀린다(Phase 6에서 겪은 것과 같은 함정).
+
+# %%
+lot_pattern_df = pd.read_csv(OUTPUT_DIR / "phase8_lot_pattern_cohesion_test.csv")
+
+# 전체 요약 수치는 09_lot_homogeneity.py가 출력한 txt에서 D조건 줄만 파싱한다.
+# (수치를 여기에 다시 적으면 분석을 다시 돌렸을 때 화면이 조용히 거짓말을 한다)
+import re  # noqa: E402
+
+lot_summary = None
+_txt = (OUTPUT_DIR / "phase8_lot_homogeneity.txt").read_text(encoding="utf-8")
+for line in _txt.splitlines():
+    if line.startswith("D."):
+        nums = re.findall(r"[\d,]+\.?\d*", line.replace("D.", ""))
+        lot_summary = {
+            "wafers": int(nums[0].replace(",", "")),
+            "pairs": int(nums[1].replace(",", "")),
+            "observed": float(nums[2]),
+            "control": float(nums[3]),
+            "lift": float(nums[4]),
+            "z": float(nums[5]),
+        }
+        break
+if lot_summary is None:
+    raise RuntimeError("phase8_lot_homogeneity.txt에서 D조건 줄을 찾지 못했습니다")
+print(f"[3b] Lot 응집도 로드: 실제 {lot_summary['observed']}% vs "
+      f"통제군 {lot_summary['control']}% (배율 {lot_summary['lift']}x)")
+
+# %% [markdown]
 # ## 4. Phase 4 개선 과정 텍스트 요약 (방법론 화면용)
 
 # %%
@@ -148,6 +181,8 @@ bundle = {
     "overall_metrics": overall_metrics,  # 화면 2, 5
     "metrics_v1": metrics_v1,          # 화면 5 (1차 결과, 비교용)
     "spc_bundle": spc_bundle,          # 화면 3
+    "lot_pattern_df": lot_pattern_df,  # 화면 3 (Lot 응집도, 패턴별)
+    "lot_summary": lot_summary,        # 화면 3 (Lot 응집도, 전체)
     "contribution_df": contribution_df,  # 화면 4
     "phase4_journey": phase4_journey,  # 화면 5
 }
