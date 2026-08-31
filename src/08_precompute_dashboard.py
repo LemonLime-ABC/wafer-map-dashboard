@@ -197,6 +197,9 @@ bundle = {
 }
 
 dashboard_path = ARTIFACTS_DIR / "dashboard_bundle.joblib"
-joblib.dump(bundle, dashboard_path)
+# 압축 필수. 번들에는 웨이퍼 맵(값이 0/1/2뿐)이 2만 장 넘게 들어 있어
+# 무압축이면 100MB를 넘고, GitHub의 파일당 100MB 한계에 걸려 푸시가 거부된다.
+# 이 데이터는 zlib으로 약 20배 눌린다.
+joblib.dump(bundle, dashboard_path, compress=("zlib", 6))
 print(f"\n[완료] 대시보드 번들 저장: {dashboard_path} "
       f"({dashboard_path.stat().st_size / 1e6:.1f} MB)")

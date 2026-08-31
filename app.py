@@ -494,16 +494,37 @@ elif page == PAGES[2]:
                          horizontal=True, key="gallery_view")
 
         if gview == "Lot 하나씩 보기":
-            g1, g2 = st.columns([1, 1])
+            # Lot이 900개가 넘으므로 드롭다운에 그냥 넣으면 못 고른다. 먼저 좁힌다.
+            all_pats = sorted({v["dominant"] for v in lot_gallery.values()})
+            g1, g2, g3 = st.columns([1, 1, 1])
             with g1:
-                grp = st.selectbox("Lot 유형", ["단일 패턴", "혼재"], key="lot_grp")
-            cand = {k: v for k, v in lot_gallery.items() if v["group"] == grp}
+                grp = st.selectbox("Lot 유형", ["전체", "단일 패턴", "혼재"],
+                                   key="lot_grp")
             with g2:
-                lot_pick = st.selectbox(
-                    "Lot 선택", list(cand.keys()),
-                    format_func=lambda k: (f"{k} · 웨이퍼 {len(cand[k]['maps'])}장 · "
-                                           f"패턴 {'/'.join(cand[k]['kind_list'])}"),
-                    key="lot_pick")
+                pat_f = st.selectbox("주 불량 패턴", ["전체"] + all_pats,
+                                     key="lot_pat_f")
+            with g3:
+                min_def = st.slider("최소 불량 장수", 3, 25, 3, key="lot_min_def")
+
+            cand = {
+                k: v for k, v in lot_gallery.items()
+                if (grp == "전체" or v["group"] == grp)
+                and (pat_f == "전체" or v["dominant"] == pat_f)
+                and v["n_defect"] >= min_def
+            }
+            st.caption(
+                f"전체 **{len(lot_gallery):,}개** Lot 중 조건에 맞는 Lot "
+                f"**{len(cand):,}개** — Test 라벨 · 불량 3장 이상인 Lot을 전부 담았습니다."
+            )
+            if not cand:
+                st.warning("조건에 맞는 Lot이 없습니다. 필터를 완화해 주세요.")
+                st.stop()
+            lot_pick = st.selectbox(
+                "Lot 선택", list(cand.keys()),
+                format_func=lambda k: (f"{k} · 불량 {cand[k]['n_defect']}장 / "
+                                       f"{cand[k]['n_shown']}장 · "
+                                       f"패턴 {'·'.join(cand[k]['kind_list'])}"),
+                key="lot_pick")
             info = cand[lot_pick]
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("라벨된 웨이퍼", f"{info['n_shown']}장")

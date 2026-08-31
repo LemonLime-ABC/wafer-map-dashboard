@@ -28,9 +28,12 @@ from resize_utils import resize_nearest   # noqa: E402
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ARTIFACTS = PROJECT_ROOT / "artifacts"
 
-N_LOTS_PER_GROUP = 20   # 응집/혼재 각각 몇 개 Lot을 담을지
-MIN_DEFECT = 4          # 불량이 이보다 적은 Lot은 비교가 무의미
+# 조건을 만족하는 Lot을 전부 담는다.
+# 웨이퍼 맵은 값이 0/1/2 뿐이라 zlib으로 약 17배 압축된다(4.04MB -> 0.24MB).
+# 그래서 개수를 인위적으로 줄일 이유가 없다 — 화면에서 필터로 좁히면 된다.
+MIN_DEFECT = 3          # 불량이 이보다 적은 Lot은 응집도를 볼 게 없다
 MAX_WAFERS = 25         # 한 Lot에서 보여줄 최대 장수 (FOUP 표준 용량과 동일)
+COMPRESS = ("zlib", 9)
 
 # %%
 df = load_wm811k()
@@ -72,16 +75,10 @@ for lot, n_def in usable.items():
                  "n_kinds": int(pats.nunique())})
 stat = pd.DataFrame(rows)
 
-# 뭉친 쪽: 한 패턴이 100%면서 웨이퍼가 많은 순
-cohesive = (stat[stat["share"] == 1.0]
-            .sort_values("n", ascending=False)
-            .head(N_LOTS_PER_GROUP))
-# 섞인 쪽: 패턴 종류가 많은 순
-mixed = (stat[stat["n_kinds"] >= 3]
-         .sort_values(["n_kinds", "n"], ascending=False)
-         .head(N_LOTS_PER_GROUP))
-
-print(f"[2] 단일 패턴 Lot {len(cohesive)}개 / 혼재 Lot {len(mixed)}개 선정")
+selected = stat.sort_values(["n", "n_kinds"], ascending=[False, True])
+n_single = int((selected["share"] == 1.0).sum())
+print(f"[2] Lot {len(selected)}개 전부 선정 "
+      f"(단일 패턴 {n_single}개 / 혼재 {len(selected)-n_single}개)")
 
 # %% [markdown]
 # ## 웨이퍼 맵을 64x64로 줄여 담는다
@@ -92,7 +89,7 @@ print(f"[2] 단일 패턴 Lot {len(cohesive)}개 / 혼재 Lot {len(mixed)}개 �
 
 # %%
 gallery = {}
-for _, r in pd.concat([cohesive, mixed]).iterrows():
+for _, r in selected.iterrows():
     # waferIndex = 카세트 안의 슬롯 번호. 이 순서로 정렬해야
     # "몇 번 슬롯이 불량인가"라는 실제로 의미 있는 배열이 된다.
     sub = (lab[lab["lotName"] == r["lot"]]
@@ -104,7 +101,11 @@ for _, r in pd.concat([cohesive, mixed]).iterrows():
         pats.append(row["failureType_clean"])
         idxs.append(int(row["waferIndex"]) if not pd.isna(row["waferIndex"]) else -1)
     kinds = sorted(set(p for p in pats if p != "none"))
+    # 화면 필터용: 이 Lot에서 가장 많이 나온 불량 패턴
+    dpats = [p for p in pats if p != "none"]
+    dominant = max(set(dpats), key=dpats.count) if dpats else "none"
     gallery[r["lot"]] = {
+        "dominant": dominant,
         "maps": np.stack(maps),
         "patterns": pats,
         "wafer_idx": idxs,
@@ -124,8 +125,9 @@ print(f"[3] Lot {len(gallery)}개 / 웨이퍼 맵 {total_maps}장 수집 "
       f"(불량 {total_def}장 · 정상 {total_maps - total_def}장)")
 
 out = ARTIFACTS / "lot_gallery.joblib"
-joblib.dump(gallery, out)
-print(f"\n[완료] 저장: {out.name}  ({out.stat().st_size/1e6:.2f} MB)")
+joblib.dump(gallery, out, compress=COMPRESS)
+print(f"\n[완료] 저장: {out.name}  ({out.stat().st_size/1e6:.2f} MB, "
+      f"압축 {COMPRESS[0]} 레벨 {COMPRESS[1]})")
 
 # 확인용 요약
 print("\n--- 담긴 Lot 목록 ---")
