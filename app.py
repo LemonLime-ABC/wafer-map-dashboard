@@ -131,9 +131,13 @@ def _grid(maps, labels, wafer_idx, cols: int = 6, label_is_lot: bool = False):
                 st.plotly_chart(fig, width='stretch',
                                 key=f"grid_{label_is_lot}_{start}_{slot}_{labels[k]}",
                                 config={"displayModeBar": False})
-                cap = labels[k] if label_is_lot else labels[k]
+                cap = labels[k]
                 sub = f"slot {wafer_idx[k]}" if wafer_idx[k] > 0 else ""
-                st.caption(f"**{cap}**  \n{sub}")
+                # 정상(none)은 흐리게 — 불량이 어느 슬롯에 몰렸는지가 한눈에 보이도록
+                if not label_is_lot and cap == "none":
+                    st.caption(f":gray[정상]  \n:gray[{sub}]")
+                else:
+                    st.caption(f"**{cap}**  \n{sub}")
 
 
 # --------------------------------------------
@@ -501,20 +505,25 @@ elif page == PAGES[2]:
                                            f"패턴 {'/'.join(cand[k]['kind_list'])}"),
                     key="lot_pick")
             info = cand[lot_pick]
-            st.markdown(
-                f"**{lot_pick}** — 이 Lot의 라벨된 불량 웨이퍼 {info['n_total']}장 중 "
-                f"{len(info['maps'])}장 표시 · 패턴 종류 **{info['n_kinds']}개** · "
-                f"최빈 패턴 비중 **{info['top_share']*100:.0f}%**"
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("라벨된 웨이퍼", f"{info['n_shown']}장")
+            c2.metric("불량", f"{info['n_defect']}장")
+            c3.metric("정상(none)", f"{info['n_normal']}장")
+            c4.metric("불량 패턴 종류", f"{info['n_kinds']}종")
+            st.caption(
+                f"**{lot_pick}** · 카세트 슬롯 번호 순서로 배열했습니다. "
+                f"최빈 불량 패턴 비중 **{info['top_share']*100:.0f}%** · "
+                f"패턴 {' / '.join(info['kind_list'])}"
             )
             _grid(info["maps"], info["patterns"], info["wafer_idx"])
             if info["n_kinds"] == 1:
                 st.success(
-                    f"이 Lot은 {len(info['maps'])}장이 전부 **{info['kind_list'][0]}** 입니다. "
-                    "같은 공정 경로를 통과한 묶음 전체가 같은 방식으로 영향받았다는 "
-                    "가설과 맞는 모습입니다.")
+                    f"이 Lot의 불량 {info['n_defect']}장이 **전부 "
+                    f"{info['kind_list'][0]}** 입니다. 같은 공정 경로를 통과한 묶음이 "
+                    "같은 방식으로 영향받았다는 가설과 맞는 모습입니다.")
             else:
                 st.warning(
-                    f"이 Lot에는 패턴이 **{info['n_kinds']}종** 섞여 있습니다. "
+                    f"이 Lot에는 불량 패턴이 **{info['n_kinds']}종** 섞여 있습니다. "
                     "모든 Lot이 뭉치는 것은 아니며, 응집도 65.52%는 "
                     "**평균값**이라는 점을 보여주는 사례입니다.")
         else:
@@ -526,7 +535,9 @@ elif page == PAGES[2]:
             pat_pick = st.selectbox(
                 "패턴 선택", sorted(by_pat.keys()),
                 format_func=lambda p: f"{p} · {len(by_pat[p])}장", key="pat_pick")
-            items = by_pat[pat_pick][:12]
+            n_show = st.slider("표시 장수", 6, min(48, len(by_pat[pat_pick])),
+                               min(24, len(by_pat[pat_pick])), step=6, key="pat_n")
+            items = by_pat[pat_pick][:n_show]
             st.markdown(
                 f"**{pat_pick}** — 갤러리에 담긴 {len(by_pat[pat_pick])}장 중 "
                 f"{len(items)}장 표시. 캡션은 이 웨이퍼가 속한 Lot입니다."

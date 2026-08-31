@@ -28,23 +28,28 @@ from resize_utils import resize_nearest   # noqa: E402
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ARTIFACTS = PROJECT_ROOT / "artifacts"
 
-N_LOTS_PER_GROUP = 14   # 응집/혼재 각각 몇 개 Lot을 담을지
-MIN_WAFERS = 4          # 웨이퍼가 이보다 적은 Lot은 비교가 무의미
-MAX_WAFERS = 12         # 한 Lot에서 화면에 보여줄 최대 장수 (용량 제한)
+N_LOTS_PER_GROUP = 20   # 응집/혼재 각각 몇 개 Lot을 담을지
+MIN_DEFECT = 4          # 불량이 이보다 적은 Lot은 비교가 무의미
+MAX_WAFERS = 25         # 한 Lot에서 보여줄 최대 장수 (FOUP 표준 용량과 동일)
 
 # %%
 df = load_wm811k()
 
+# Lot 전체를 보여주려면 정상(none)도 함께 담아야 한다.
+# 불량만 담으면 "이 Lot의 25장 중 몇 장이 불량인가"라는 실제로 궁금한 그림이
+# 빠진다. Training 라벨은 원 연구자가 균형 맞추려 뽑은 세트라 제외한다.
 lab = df[
     (df["failureType_clean"].notna())
-    & (df["failureType_clean"] != "none")
     & (df["trainTestLabel_clean"] == "Test")
 ].copy()
-print(f"[1] 대상 웨이퍼(Test·불량만): {len(lab):,}장")
+defect = lab[lab["failureType_clean"] != "none"]
+print(f"[1] 대상 웨이퍼(Test 라벨 전체): {len(lab):,}장 "
+      f"(그중 불량 {len(defect):,}장)")
 
-counts = lab.groupby("lotName").size()
-usable = counts[counts >= MIN_WAFERS]
-print(f"    웨이퍼 {MIN_WAFERS}장 이상인 Lot: {len(usable):,}개")
+# Lot 선정 기준은 '불량 장수'로 본다 — 정상만 25장인 Lot은 볼 게 없다.
+d_counts = defect.groupby("lotName").size()
+usable = d_counts[d_counts >= MIN_DEFECT]
+print(f"    불량 {MIN_DEFECT}장 이상인 Lot: {len(usable):,}개")
 
 # %% [markdown]
 # ## Lot을 두 부류로 나눠 고른다
@@ -54,14 +59,17 @@ print(f"    웨이퍼 {MIN_WAFERS}장 이상인 Lot: {len(usable):,}개")
 # (CLAUDE.md 2.2절 (6) 통제군 원칙과 같은 취지)
 
 # %%
-rows = []
-for lot, n in usable.items():
-    pats = lab[lab["lotName"] == lot]["failureType_clean"]
-    top_share = pats.value_counts().iloc[0] / n   # 최빈 패턴이 차지하는 비율
-    rows.append({"lot": lot, "n": int(n), "share": float(top_share),
-                 "n_kinds": int(pats.nunique())})
-
 import pandas as pd  # noqa: E402
+
+rows = []
+for lot, n_def in usable.items():
+    pats = defect[defect["lotName"] == lot]["failureType_clean"]
+    top_share = pats.value_counts().iloc[0] / n_def   # 최빈 불량 패턴의 비중
+    rows.append({"lot": lot,
+                 "n": int(n_def),                       # 불량 장수
+                 "n_all": int((lab["lotName"] == lot).sum()),  # 라벨된 전체 장수
+                 "share": float(top_share),
+                 "n_kinds": int(pats.nunique())})
 stat = pd.DataFrame(rows)
 
 # 뭉친 쪽: 한 패턴이 100%면서 웨이퍼가 많은 순
@@ -85,18 +93,25 @@ print(f"[2] 단일 패턴 Lot {len(cohesive)}개 / 혼재 Lot {len(mixed)}개 �
 # %%
 gallery = {}
 for _, r in pd.concat([cohesive, mixed]).iterrows():
-    sub = lab[lab["lotName"] == r["lot"]].head(MAX_WAFERS)
+    # waferIndex = 카세트 안의 슬롯 번호. 이 순서로 정렬해야
+    # "몇 번 슬롯이 불량인가"라는 실제로 의미 있는 배열이 된다.
+    sub = (lab[lab["lotName"] == r["lot"]]
+           .sort_values("waferIndex")
+           .head(MAX_WAFERS))
     maps, pats, idxs = [], [], []
-    for orig_idx, row in sub.iterrows():
+    for _, row in sub.iterrows():
         maps.append(resize_nearest(row["waferMap"], 64).astype(np.uint8))
         pats.append(row["failureType_clean"])
         idxs.append(int(row["waferIndex"]) if not pd.isna(row["waferIndex"]) else -1)
-    kinds = sorted(set(pats))
+    kinds = sorted(set(p for p in pats if p != "none"))
     gallery[r["lot"]] = {
         "maps": np.stack(maps),
         "patterns": pats,
         "wafer_idx": idxs,
-        "n_total": int(r["n"]),
+        "n_shown": len(maps),                       # 화면에 뜨는 장수
+        "n_defect": int(sum(p != "none" for p in pats)),
+        "n_normal": int(sum(p == "none" for p in pats)),
+        "n_defect_total": int(r["n"]),              # 이 Lot의 전체 불량 장수
         "n_kinds": int(r["n_kinds"]),
         "top_share": float(r["share"]),
         "kind_list": kinds,
@@ -104,7 +119,9 @@ for _, r in pd.concat([cohesive, mixed]).iterrows():
     }
 
 total_maps = sum(len(v["maps"]) for v in gallery.values())
-print(f"[3] Lot {len(gallery)}개 / 웨이퍼 맵 {total_maps}장 수집")
+total_def = sum(v["n_defect"] for v in gallery.values())
+print(f"[3] Lot {len(gallery)}개 / 웨이퍼 맵 {total_maps}장 수집 "
+      f"(불량 {total_def}장 · 정상 {total_maps - total_def}장)")
 
 out = ARTIFACTS / "lot_gallery.joblib"
 joblib.dump(gallery, out)
@@ -113,6 +130,6 @@ print(f"\n[완료] 저장: {out.name}  ({out.stat().st_size/1e6:.2f} MB)")
 # 확인용 요약
 print("\n--- 담긴 Lot 목록 ---")
 for lot, v in list(gallery.items())[:6]:
-    print(f"  {lot:<12} {v['group']:<8} 웨이퍼 {len(v['maps'])}장 "
-          f"(전체 {v['n_total']}장) 패턴 {v['kind_list']}")
+    print(f"  {lot:<12} {v['group']:<8} 표시 {v['n_shown']:>2}장 "
+          f"(불량 {v['n_defect']:>2} / 정상 {v['n_normal']:>2}) 패턴 {v['kind_list']}")
 print(f"  ... 외 {max(0, len(gallery)-6)}개")
