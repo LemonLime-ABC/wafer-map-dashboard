@@ -147,6 +147,14 @@ if lot_summary is None:
 print(f"[3b] Lot 응집도 로드: 실제 {lot_summary['observed']}% vs "
       f"통제군 {lot_summary['control']}% (배율 {lot_summary['lift']}x)")
 
+# Lot별 웨이퍼 맵 갤러리 (12_lot_gallery.py가 원본에서 뽑아둔 것).
+# 응집도 수치를 눈으로 확인시켜 주는 용도라 없으면 그 섹션만 건너뛴다.
+gallery_path = ARTIFACTS_DIR / "lot_gallery.joblib"
+lot_gallery = joblib.load(gallery_path) if gallery_path.exists() else None
+if lot_gallery:
+    print(f"[3c] Lot 갤러리 로드: Lot {len(lot_gallery)}개 / "
+          f"웨이퍼 {sum(len(v['maps']) for v in lot_gallery.values())}장")
+
 # %% [markdown]
 # ## 4. Phase 4 개선 과정 텍스트 요약 (방법론 화면용)
 
@@ -183,6 +191,7 @@ bundle = {
     "spc_bundle": spc_bundle,          # 화면 3
     "lot_pattern_df": lot_pattern_df,  # 화면 3 (Lot 응집도, 패턴별)
     "lot_summary": lot_summary,        # 화면 3 (Lot 응집도, 전체)
+    "lot_gallery": lot_gallery,        # 화면 3 (Lot별 웨이퍼 맵 갤러리)
     "contribution_df": contribution_df,  # 화면 4
     "phase4_journey": phase4_journey,  # 화면 5
 }

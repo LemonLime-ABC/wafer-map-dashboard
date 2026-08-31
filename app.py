@@ -67,6 +67,7 @@ probs_all = bundle.get("probs_all")
 # 없으면 해당 섹션만 건너뛴다.
 lot_pattern_df = bundle.get("lot_pattern_df")
 lot_summary = bundle.get("lot_summary")
+lot_gallery = bundle.get("lot_gallery")
 cm = bundle["cm"]
 per_class_df = bundle["per_class_df"]
 overall = bundle["overall_metrics"]
@@ -108,6 +109,31 @@ def wafer_heatmap_fig(img: np.ndarray, title: str, height: int = 300) -> go.Figu
     fig.update_layout(title=title, height=height, margin=dict(l=10, r=10, t=35, b=10),
                        xaxis=dict(visible=False), yaxis=dict(visible=False))
     return fig
+
+
+def _grid(maps, labels, wafer_idx, cols: int = 6, label_is_lot: bool = False):
+    """웨이퍼 맵 여러 장을 격자로 늘어놓는다.
+
+    Lot 응집도를 눈으로 확인시키는 용도라, 개별 맵을 크게 보여주기보다
+    한 화면에 여러 장을 나란히 놓아 '비슷한가/다른가'가 바로 보이게 한다.
+    """
+    for start in range(0, len(maps), cols):
+        row = st.columns(cols)
+        for slot, k in enumerate(range(start, min(start + cols, len(maps)))):
+            with row[slot]:
+                fig = go.Figure(go.Heatmap(z=maps[k][::-1], colorscale=DIE_COLORSCALE,
+                                           zmin=0, zmax=2, showscale=False))
+                fig.update_layout(height=150,
+                                  margin=dict(l=2, r=2, t=2, b=2),
+                                  xaxis=dict(visible=False), yaxis=dict(visible=False))
+                # key를 안 주면 같은 화면에 차트가 여러 개일 때 Streamlit이
+                # 중복 ID로 오류를 낸다.
+                st.plotly_chart(fig, width='stretch',
+                                key=f"grid_{label_is_lot}_{start}_{slot}_{labels[k]}",
+                                config={"displayModeBar": False})
+                cap = labels[k] if label_is_lot else labels[k]
+                sub = f"slot {wafer_idx[k]}" if wafer_idx[k] > 0 else ""
+                st.caption(f"**{cap}**  \n{sub}")
 
 
 # --------------------------------------------
@@ -443,6 +469,74 @@ elif page == PAGES[2]:
                 "'우연이 아닌가'는 배율로 봐야 합니다.\n"
                 "- **Training 라벨을 포함하면 92.73%**로 부풀려집니다(Test만 쓰면 65.52%). "
                 "위 SPC 관리도에서 겪은 것과 **같은 함정이 두 번째로 재발**한 사례입니다."
+            )
+
+    # ------------------------------------------------------------
+    # Lot별 웨이퍼 맵 갤러리 — 위 응집도 수치를 눈으로 확인
+    # 숫자(2.92배)만으로는 "실제로 얼마나 비슷한지"가 안 와닿는다.
+    # 같은 Lot의 맵을 나란히 놓으면 바로 보인다.
+    # ------------------------------------------------------------
+    if lot_gallery:
+        st.divider()
+        st.subheader("Lot별 웨이퍼 맵 — 직접 보기")
+        st.caption(
+            "위 수치를 눈으로 확인하는 화면입니다. "
+            "**단일 패턴 Lot과 혼재 Lot을 둘 다** 담았습니다 — "
+            "뭉친 것만 보여주면 '좋은 것만 골랐다'는 반박을 받기 때문입니다."
+        )
+
+        gview = st.radio("보기 방식",
+                         ["Lot 하나씩 보기", "패턴별로 모아 보기"],
+                         horizontal=True, key="gallery_view")
+
+        if gview == "Lot 하나씩 보기":
+            g1, g2 = st.columns([1, 1])
+            with g1:
+                grp = st.selectbox("Lot 유형", ["단일 패턴", "혼재"], key="lot_grp")
+            cand = {k: v for k, v in lot_gallery.items() if v["group"] == grp}
+            with g2:
+                lot_pick = st.selectbox(
+                    "Lot 선택", list(cand.keys()),
+                    format_func=lambda k: (f"{k} · 웨이퍼 {len(cand[k]['maps'])}장 · "
+                                           f"패턴 {'/'.join(cand[k]['kind_list'])}"),
+                    key="lot_pick")
+            info = cand[lot_pick]
+            st.markdown(
+                f"**{lot_pick}** — 이 Lot의 라벨된 불량 웨이퍼 {info['n_total']}장 중 "
+                f"{len(info['maps'])}장 표시 · 패턴 종류 **{info['n_kinds']}개** · "
+                f"최빈 패턴 비중 **{info['top_share']*100:.0f}%**"
+            )
+            _grid(info["maps"], info["patterns"], info["wafer_idx"])
+            if info["n_kinds"] == 1:
+                st.success(
+                    f"이 Lot은 {len(info['maps'])}장이 전부 **{info['kind_list'][0]}** 입니다. "
+                    "같은 공정 경로를 통과한 묶음 전체가 같은 방식으로 영향받았다는 "
+                    "가설과 맞는 모습입니다.")
+            else:
+                st.warning(
+                    f"이 Lot에는 패턴이 **{info['n_kinds']}종** 섞여 있습니다. "
+                    "모든 Lot이 뭉치는 것은 아니며, 응집도 65.52%는 "
+                    "**평균값**이라는 점을 보여주는 사례입니다.")
+        else:
+            # 패턴별: 갤러리 전체를 패턴 기준으로 다시 묶는다
+            by_pat = {}
+            for lot, v in lot_gallery.items():
+                for m, p, wi in zip(v["maps"], v["patterns"], v["wafer_idx"]):
+                    by_pat.setdefault(p, []).append((m, lot, wi))
+            pat_pick = st.selectbox(
+                "패턴 선택", sorted(by_pat.keys()),
+                format_func=lambda p: f"{p} · {len(by_pat[p])}장", key="pat_pick")
+            items = by_pat[pat_pick][:12]
+            st.markdown(
+                f"**{pat_pick}** — 갤러리에 담긴 {len(by_pat[pat_pick])}장 중 "
+                f"{len(items)}장 표시. 캡션은 이 웨이퍼가 속한 Lot입니다."
+            )
+            _grid([i[0] for i in items],
+                  [i[1] for i in items],
+                  [i[2] for i in items], label_is_lot=True)
+            st.caption(
+                "같은 패턴이라도 Lot이 다르면 모양의 세부는 제각각입니다. "
+                "모델은 이 변형들을 하나의 패턴으로 묶어내야 합니다."
             )
 
 # ============================================
