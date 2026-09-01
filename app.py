@@ -103,6 +103,103 @@ PROCESS_MAP = {
 }
 
 
+# 공정 원인 매핑의 근거 문헌.
+# 원문을 그대로 옮기지 않고 메커니즘을 우리말로 요약한 뒤 출처를 밝힌다
+# (논문 본문·그림을 그대로 게시하면 저작권 문제가 되고, 유료 논문은
+#  본문 접근도 안 된다. 출처를 밝히고 링크로 확인하게 하는 것이 정석이다).
+#
+# 여기에는 공정 문헌에서 메커니즘이 명확히 확인된 항목만 싣는다.
+EVIDENCE = [
+    {
+        "patterns": ["Loc", "Edge-Loc", "Random"],
+        "claim": "챔버 내부에 쌓인 부산물이 박리되어 웨이퍼에 떨어지면 국소 결함이 된다",
+        "summary": (
+            "플라즈마 장비 문헌은 파티클 발생 경로를 이렇게 기술한다 — 챔버 내벽이 "
+            "플라즈마에 노출되면 반응 부산물 막이 쌓이고, 이 막이 시간이 지나며 "
+            "박리(flaking)되어 공정 환경을 오염시킨다. 식각 장비의 파티클 발생원으로는 "
+            "챔버 표면 증착막의 박리와 정전척에서 떨어져 나오는 물질이 함께 지목된다. "
+            "떨어진 입자는 웨이퍼 표면에 낙하해 결함을 만들고 수율을 떨어뜨린다. "
+            "'쌓임 → 박리 → 낙하 → 국소 결함'이라는 인과 사슬이 문서화되어 있다."
+        ),
+        "sources": [
+            ("Reduction of Particle Contamination in Plasma-Etching Equipment by "
+             "Dehydration of Chamber Wall (Jpn. J. Appl. Phys. 47, 3630)",
+             "https://iopscience.iop.org/article/10.1143/JJAP.47.3630"),
+            ("Investigation of contamination particles generation and surface chemical "
+             "reactions on Al2O3, Y2O3, and YF3 coatings in F-based plasma "
+             "(Applied Surface Science)",
+             "https://www.sciencedirect.com/science/article/abs/pii/S0169433223010450"),
+        ],
+    },
+    {
+        "patterns": ["Center"],
+        "claim": "웨이퍼 반경 방향 CD 편차는 웨이퍼 레벨 특성 맵으로 나타난다",
+        "summary": (
+            "식각 속도와 증착 두께가 반경 방향으로 균일하지 않으면 CD(선폭)가 중심과 "
+            "가장자리에서 다르게 형성되고, 이것이 웨이퍼 전체의 특성 분포 맵으로 "
+            "드러난다고 보고된다. 웨이퍼 중심-가장자리 CD 편차 문제가 수율에 직접 "
+            "영향을 준다는 서술도 함께 확인된다. 실제로 이 편차를 잡기 위해 식각 "
+            "장비의 온도 제어 영역이 1개에서 반경 방향 4개 존으로 늘어나는 방향으로 "
+            "발전해 왔다."
+        ),
+        "sources": [
+            ("Across-wafer CD uniformity control through lithography and etch process: "
+             "Experimental verification (SPIE 6518)",
+             "https://www.researchgate.net/publication/228984337_Across-wafer_CD_uniformity_control_through_lithography_and_etch_process_Experimental_verification_-_art_no_65182C"),
+            ("Evolution of across-wafer uniformity control in plasma etch "
+             "(Semiconductor Digest)",
+             "https://sst.semiconductor-digest.com/2016/08/evolution-of-across-wafer-uniformity-control-in-plasma-etch/"),
+        ],
+    },
+    {
+        "patterns": ["Edge-Ring", "Edge-Loc"],
+        "claim": "웨이퍼 가장자리 구조물(정전척·포커스링)이 링 형태 결함 맵을 만든다",
+        "summary": (
+            "이온주입 장비 연구는 웨이퍼 가장자리에 분포한 결함이 링 형태의 맵을 "
+            "형성하며, 정전척의 프린지 필드가 링 형태 손상의 핵심 원인이라고 보고한다. "
+            "포커스링은 정전척 위에서 웨이퍼 가장자리를 둘러싸도록 배치되어 플라즈마를 "
+            "가두는 부품이므로, 웨이퍼 가장자리 바로 옆에 위치한다. 가장자리 조건은 "
+            "이런 부품을 두고도 중심부보다 떨어지는 경향이 있어 별도 튜닝 대상이 된다."
+        ),
+        "sources": [
+            ("Ring-type ESD damage caused by electrostatic chuck of ion implanter "
+             "(SPIE Proceedings 3743)",
+             "https://www.spiedigitallibrary.org/conference-proceedings-of-spie/3743/1/Ring-type-ESD-damage-caused-by-electrostatic-chuck-of-ion/10.1117/12.346916.short"),
+            ("Defect Challenges Grow At The Wafer Edge (Semiconductor Engineering)",
+             "https://semiengineering.com/defect-challenges-grow-at-the-wafer-edge/"),
+        ],
+    },
+    {
+        "patterns": ["Scratch"],
+        "claim": "선형 스크래치는 장비 취급 과정의 기계적 접촉에서 발생한다",
+        "summary": (
+            "웨이퍼 맵 결함 분류 문헌에서 스크래치는 장비 핸들링 문제의 결과로 "
+            "일관되게 기술된다. 이 항목은 조사한 자료들 사이에 이견이 없었다."
+        ),
+        "sources": [
+            ("Wafer defect recognition method based on multi-scale feature fusion "
+             "(Frontiers in Neuroscience)",
+             "https://pmc.ncbi.nlm.nih.gov/articles/PMC10272367/"),
+        ],
+    },
+    {
+        "patterns": ["Donut"],
+        "claim": "스핀 코팅의 가장자리 비드와 그 제거(EBR)가 가장자리 결함률을 좌우한다",
+        "summary": (
+            "스핀 코팅에서는 표면장력 때문에 기판 가장자리에 두꺼운 비드가 형성되며, "
+            "이 과잉 두께가 가장자리 결함률 증가와 수율 저하의 원인이 된다. 그래서 "
+            "코팅 직후 EBR로 폭 1~5mm의 환형 영역을 제거하는 것이 표준 절차다. "
+            "즉 웨이퍼 최외곽의 상태는 EBR이 규정하므로, 가장자리가 정상으로 보인다는 "
+            "사실만으로 앞 공정이 정상이라고 판단할 수 없다."
+        ),
+        "sources": [
+            ("Spin Coating of Photoresists (MicroChemicals, Application Note)",
+             "https://www.microchemicals.com/dokumente/application_notes/spin_coating_photoresist.pdf"),
+        ],
+    },
+]
+
+
 def wafer_heatmap_fig(img: np.ndarray, title: str, height: int = 300) -> go.Figure:
     fig = go.Figure(data=go.Heatmap(z=img[::-1], colorscale=DIE_COLORSCALE,
                                      zmin=0, zmax=2, showscale=False))
@@ -603,6 +700,34 @@ elif page == PAGES[3]:
         "Edge-Loc과 Loc이 발생률·다이당 불량 비율 둘 다 상당해 기여도 1·2위입니다. "
         "Near-full은 발생률은 최하위(0.08%)지만 다이당 불량 비율이 87.6%로 압도적이라 "
         "**발생 시 피해가 매우 큽니다** — 발생률만으로 우선순위를 정하면 놓칠 수 있는 지점입니다."
+    )
+
+    # ------------------------------------------------------------
+    # 근거 문헌 — 위 매핑이 어디에 기반했는지 확인 가능하게 한다
+    # ------------------------------------------------------------
+    st.divider()
+    st.subheader("공정 원인 매핑의 근거 문헌")
+    st.caption(
+        "위 표의 공정 모듈·원인은 반도체 공정 문헌에 기술된 메커니즘에 기반합니다. "
+        "아래는 각 메커니즘이 어떤 자료에서 확인되는지 정리한 것입니다. "
+        "원문을 그대로 옮기지 않고 메커니즘을 요약했으며, 출처 링크로 직접 확인하실 수 있습니다."
+    )
+
+    for ev in EVIDENCE:
+        with st.expander(
+            f"{' · '.join(ev['patterns'])}  —  {ev['claim']}", expanded=False
+        ):
+            st.markdown(ev["summary"])
+            st.markdown("**출처**")
+            for title, url in ev["sources"]:
+                st.markdown(f"- [{title}]({url})")
+
+    st.warning(
+        "**이 데이터로 검증한 것은 아닙니다.** WM-811K에는 설비 ID·레시피·공정 "
+        "파라미터·타임스탬프가 없습니다(컬럼은 waferMap · dieSize · lotName · "
+        "waferIndex · trainTestLabel · failureType 6개뿐이고, 라벨은 패턴 이름 9종). "
+        "따라서 위 대응 관계는 **공정 지식에 근거한 원인 후보**이지, "
+        "이 데이터셋에서 인과를 확인한 결과가 아닙니다."
     )
 
 # ============================================
