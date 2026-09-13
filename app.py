@@ -24,6 +24,11 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(BASE, "src"))
 from model import WaferCNN  # noqa: E402
 from gradcam import GradCAM  # noqa: E402
+from live_inference import (  # noqa: E402
+    RULE_WM, RULE_BIN, parse_wafer_file, input_warnings, map_summary,
+    to_model_input, load_fold_models, predict_probs,
+)
+from resize_utils import resize_nearest  # noqa: E402
 
 ART = os.path.join(BASE, "artifacts")
 
@@ -200,12 +205,79 @@ EVIDENCE = [
 ]
 
 
+# 웨이퍼 맵은 64x64 정사각 데이터다. Plotly는 기본적으로 그림을 컨테이너 폭에
+# 맞춰 늘리므로, 화면이 넓을수록 다이가 가로로 찌그러진다 — PC와 휴대폰에서
+# 다르게 보이던 원인이 이것이다. y축을 x축에 1:1로 묶어(scaleanchor) 칸이 항상
+# 정사각이 되게 하고, constrain="domain"으로 범위를 늘리는 대신 그림 영역 자체를
+# 줄여 가운데 정렬시킨다.
+SQUARE_AXES = dict(
+    xaxis=dict(visible=False, constrain="domain"),
+    yaxis=dict(visible=False, scaleanchor="x", scaleratio=1, constrain="domain"),
+)
+
+
 def wafer_heatmap_fig(img: np.ndarray, title: str, height: int = 300) -> go.Figure:
     fig = go.Figure(data=go.Heatmap(z=img[::-1], colorscale=DIE_COLORSCALE,
                                      zmin=0, zmax=2, showscale=False))
     fig.update_layout(title=title, height=height, margin=dict(l=10, r=10, t=35, b=10),
-                       xaxis=dict(visible=False), yaxis=dict(visible=False))
+                       **SQUARE_AXES)
     return fig
+
+
+def gradcam_fig(img64: np.ndarray, heatmap: np.ndarray, title: str) -> go.Figure:
+    """64x64 웨이퍼 맵(회색) 위에 Grad-CAM 히트맵을 겹친다. 화면 1·6 공용."""
+    fig = go.Figure()
+    fig.add_trace(go.Heatmap(z=img64[::-1], colorscale="gray", zmin=0, zmax=2,
+                             showscale=False, opacity=0.5))
+    fig.add_trace(go.Heatmap(z=heatmap[::-1], colorscale="Jet",
+                             zmin=0, zmax=1, showscale=False, opacity=0.55))
+    fig.update_layout(title=title, height=300, margin=dict(l=10, r=10, t=35, b=10),
+                      **SQUARE_AXES)
+    return fig
+
+
+def prob_bar_fig(p: np.ndarray, pred_lab: str, true_lab: str | None = None):
+    """9개 클래스 확률 막대. 화면 1·6 공용.
+
+    색으로 역할을 구분한다: 예측한 것(빨강) / 실제 정답(초록) / 나머지(회색).
+    화면 6처럼 정답을 모르는 경우 true_lab=None이라 초록 막대가 없다.
+    반환: (그림, 확률 높은 순 이름, 확률 높은 순 값)
+    """
+    order = np.argsort(p)[::-1]          # 확률 높은 순으로 정렬
+    names_sorted = [class_names[i] for i in order]
+    vals_sorted = p[order]
+    bar_colors = []
+    for nm in names_sorted:
+        if nm == pred_lab:
+            bar_colors.append("#c44e52")
+        elif true_lab is not None and nm == true_lab:
+            bar_colors.append("#55a868")
+        else:
+            bar_colors.append("#c9ccd1")
+    fig = go.Figure(go.Bar(
+        x=names_sorted, y=vals_sorted, marker_color=bar_colors,
+        text=[f"{v*100:.1f}%" if v >= 0.001 else "<0.1%" for v in vals_sorted],
+        textposition="outside", cliponaxis=False,
+    ))
+    fig.update_layout(
+        height=300, margin=dict(l=10, r=10, t=10, b=10),
+        yaxis=dict(title="확률", range=[0, 1.15], tickformat=".0%"),
+        xaxis=dict(title=None),
+    )
+    return fig, names_sorted, vals_sorted
+
+
+@st.cache_data
+def gap_reference():
+    """fold 0 검증셋에서 '1-2등 격차 20%p 미만'이 실제로 오분류를 가려내는지.
+
+    하드코딩하면 나중에 모델이 바뀔 때 조용히 거짓말이 되므로 매번 계산한다.
+    반환: (격차 좁은 웨이퍼 수, 그중 오분류율, 격차 넓은 웨이퍼의 오분류율)
+    """
+    srt = np.sort(probs_all, axis=1)[:, ::-1]
+    narrow = (srt[:, 0] - srt[:, 1]) < 0.20
+    wrong = ~wafer_table["correct"].values
+    return int(narrow.sum()), float(wrong[narrow].mean()), float(wrong[~narrow].mean())
 
 
 def _grid(maps, labels, wafer_idx, cols: int = 6, label_is_lot: bool = False):
@@ -222,7 +294,7 @@ def _grid(maps, labels, wafer_idx, cols: int = 6, label_is_lot: bool = False):
                                            zmin=0, zmax=2, showscale=False))
                 fig.update_layout(height=150,
                                   margin=dict(l=2, r=2, t=2, b=2),
-                                  xaxis=dict(visible=False), yaxis=dict(visible=False))
+                                  **SQUARE_AXES)
                 # key를 안 주면 같은 화면에 차트가 여러 개일 때 Streamlit이
                 # 중복 ID로 오류를 낸다.
                 st.plotly_chart(fig, width='stretch',
@@ -241,7 +313,10 @@ def _grid(maps, labels, wafer_idx, cols: int = 6, label_is_lot: bool = False):
 # 화면 선택
 # --------------------------------------------
 PAGES = ["웨이퍼 맵 진단", "패턴별 성능", "Lot 수율 모니터링", "공정 원인 매핑", "모델 방법론"]
-page = st.sidebar.radio("화면 선택", PAGES)
+# 화면 6은 기존 번호(PAGES[0~4])를 건드리지 않으려고 따로 이름을 두고,
+# 메뉴에서는 '웨이퍼 맵 진단' 바로 다음에 보이게 끼워 넣는다.
+PAGE_LIVE = "새 웨이퍼 즉석 판정"
+page = st.sidebar.radio("화면 선택", [PAGES[0], PAGE_LIVE] + PAGES[1:])
 st.sidebar.divider()
 st.sidebar.caption(
     f"WM-811K · 라벨 172,950장 중 12,763장 샘플 학습\n\n"
@@ -298,14 +373,8 @@ if page == PAGES[0]:
     with g1:
         st.plotly_chart(wafer_heatmap_fig(img, "원본 웨이퍼 맵"), width='stretch')
     with g2:
-        fig_cam = go.Figure()
-        fig_cam.add_trace(go.Heatmap(z=img[::-1], colorscale="gray", zmin=0, zmax=2,
-                                      showscale=False, opacity=0.5))
-        fig_cam.add_trace(go.Heatmap(z=heatmap[::-1], colorscale="Jet",
-                                      zmin=0, zmax=1, showscale=False, opacity=0.55))
-        fig_cam.update_layout(title=f"Grad-CAM (근거: {class_names[target_cls]}, p={prob:.2f})",
-                               height=300, margin=dict(l=10, r=10, t=35, b=10),
-                               xaxis=dict(visible=False), yaxis=dict(visible=False))
+        fig_cam = gradcam_fig(img, heatmap,
+                              f"Grad-CAM (근거: {class_names[target_cls]}, p={prob:.2f})")
         st.plotly_chart(fig_cam, width='stretch')
 
     st.caption(
@@ -323,45 +392,16 @@ if page == PAGES[0]:
         st.divider()
         st.markdown("##### 9개 클래스 전체 예측 확률")
 
-        p = probs_all[local_pos]
-        order = np.argsort(p)[::-1]          # 확률 높은 순으로 정렬
-        names_sorted = [class_names[i] for i in order]
-        vals_sorted = p[order]
-
-        true_lab, pred_lab = row["true_label"], row["pred_label"]
-        # 색으로 역할을 구분한다: 예측한 것(빨강) / 실제 정답(초록) / 나머지(회색).
-        # 맞힌 경우엔 둘이 같은 막대이므로 빨강 하나만 보인다.
-        bar_colors = []
-        for nm in names_sorted:
-            if nm == pred_lab:
-                bar_colors.append("#c44e52")
-            elif nm == true_lab:
-                bar_colors.append("#55a868")
-            else:
-                bar_colors.append("#c9ccd1")
-
-        fig_p = go.Figure(go.Bar(
-            x=names_sorted, y=vals_sorted, marker_color=bar_colors,
-            text=[f"{v*100:.1f}%" if v >= 0.001 else "<0.1%" for v in vals_sorted],
-            textposition="outside", cliponaxis=False,
-        ))
-        fig_p.update_layout(
-            height=300, margin=dict(l=10, r=10, t=10, b=10),
-            yaxis=dict(title="확률", range=[0, 1.15], tickformat=".0%"),
-            xaxis=dict(title=None),
-        )
+        # 맞힌 경우엔 예측과 정답이 같은 막대이므로 빨강 하나만 보인다.
+        fig_p, names_sorted, vals_sorted = prob_bar_fig(
+            probs_all[local_pos], row["pred_label"], row["true_label"])
         st.plotly_chart(fig_p, width='stretch')
 
         # 1등과 2등의 격차 = 모델이 얼마나 확신했는가.
         # 이 임계값(20%p)이 실제로 의미가 있는지는 검증셋 전체로 확인할 수 있다.
         # (하드코딩하면 나중에 모델이 바뀔 때 조용히 거짓말이 되므로 매번 계산한다)
         gap = vals_sorted[0] - vals_sorted[1]
-        srt = np.sort(probs_all, axis=1)[:, ::-1]
-        gaps_all = srt[:, 0] - srt[:, 1]
-        narrow = gaps_all < 0.20
-        wrong = ~wafer_table["correct"].values
-        err_narrow = wrong[narrow].mean()
-        err_wide = wrong[~narrow].mean()
+        n_narrow, err_narrow, err_wide = gap_reference()
 
         msg = (f"1등 **{names_sorted[0]}** {vals_sorted[0]*100:.1f}% · "
                f"2등 **{names_sorted[1]}** {vals_sorted[1]*100:.1f}% · "
@@ -380,7 +420,7 @@ if page == PAGES[0]:
         )
         st.caption(
             f"이 검증셋({len(wafer_table):,}장)에서 **1-2등 격차가 20%p 미만인 웨이퍼는 "
-            f"{int(narrow.sum())}장이고, 그중 {err_narrow*100:.1f}%가 오분류**입니다 — "
+            f"{n_narrow}장이고, 그중 {err_narrow*100:.1f}%가 오분류**입니다 — "
             f"격차가 20%p 이상인 웨이퍼의 오분류율 {err_wide*100:.1f}%의 "
             f"약 {err_narrow/err_wide:.0f}배입니다. 즉 확률 분포의 격차는 "
             "'이 예측을 사람이 다시 봐야 하는가'를 실제로 가려냅니다."
@@ -795,3 +835,265 @@ elif page == PAGES[4]:
         "- 공정 데이터 없음: 패턴→공정 모듈 매핑은 문헌 기반, 이 데이터로 검증된 것 아님\n"
         "- Training/Test 분할 왜곡: 원 논문 저자의 라벨 curation이 Lot 순서 분석을 왜곡시킴 (Phase 6에서 발견·보정)"
     )
+
+# ============================================
+# 화면 6: 새 웨이퍼 즉석 판정
+# ============================================
+# 다른 화면은 미리 계산해 둔 결과를 보여주지만, 이 화면만은 사용자가 넣은
+# 웨이퍼 맵을 그 자리에서 모델에 통과시킨다. 계산 부분(파일 해석·입력 검사·예측)은
+# src/live_inference.py에 있고, 여기는 화면 배치만 담당한다.
+@st.cache_resource
+def load_live():
+    models5 = load_fold_models(ART, len(class_names))
+    path = os.path.join(ART, "unlabeled_samples.joblib")
+    live = joblib.load(path) if os.path.exists(path) else None
+    hpath = os.path.join(ART, "heldout_eval.joblib")
+    held = joblib.load(hpath) if os.path.exists(hpath) else None
+    return models5, live, held
+
+
+if page == PAGE_LIVE:
+    MAX_FILES = 100
+    st.subheader("새 웨이퍼 즉석 판정")
+    st.caption(
+        "웨이퍼 맵 파일을 넣으면 **그 자리에서** 모델이 판정합니다. 결과를 미리 저장해 둔 "
+        "다른 화면과 달리, 여기서는 넣는 순간 64×64 리사이즈 → CNN → Grad-CAM이 실제로 실행됩니다. "
+        "학습 때와 전처리가 같은지는 화면 1의 저장된 확률과 **오차 0으로 일치**하는 것을 확인했습니다."
+    )
+    models5, live, held = load_live()
+    ref = live["ref"] if live else None
+
+    # ---- 이 화면의 판정을 어디까지 믿을 수 있는가 (먼저 보여준다) ----
+    if held is not None:
+        with st.expander(held["headline"], expanded=False):
+            st.markdown(held["summary_md"])
+
+    # ---- 입력 ----
+    src_opts = ["파일 올리기", "예시 Lot 한 통 (25장)", "미라벨 웨이퍼 무작위 추출"]
+    src_mode = st.radio("입력 방법", src_opts, horizontal=True)
+    items, errors = [], []          # items: (이름, 웨이퍼 맵) / errors: (이름, 이유)
+
+    if src_mode == src_opts[0]:
+        c1, c2 = st.columns([3, 1])
+        rule = c1.radio("값 규칙", [RULE_WM, RULE_BIN])
+        pass_bin = c2.number_input("Pass bin 번호", value=1, step=1,
+                                   disabled=(rule == RULE_WM),
+                                   help="Bin 코드 형식일 때만 씁니다. 이 번호만 정상, 나머지 번호는 모두 불량으로 봅니다.")
+        files = st.file_uploader(
+            "웨이퍼 맵 파일을 끌어다 놓으세요 — 여러 장을 한 번에 넣으면 Lot 단위로 요약합니다",
+            type=["csv", "txt", "npy"], accept_multiple_files=True)
+        with st.expander("파일 형식 안내"):
+            st.markdown(
+                "- **한 파일 = 웨이퍼 한 장**, 격자 한 칸 = 다이 한 개. 크기는 자유(모델 입력 시 64×64로 줄임)\n"
+                "- **WM-811K 형식**: 모든 칸이 0(다이 없음) / 1(정상) / 2(불량)\n"
+                "- **Bin 코드 형식**: 빈칸 또는 음수 = 다이 없음, Pass bin 번호 = 정상, 그 외 번호 = 불량. "
+                "테스트 장비가 내는 bin map을 그대로 넣을 때 씁니다\n"
+                "- CSV(쉼표), TXT(공백 구분), NPY(2차원 숫자 배열)\n\n"
+                "시연용 파일이 저장소 samples 폴더에 있습니다 — 전부 **라벨이 없는** 원본 웨이퍼입니다."
+            )
+            st.code("0,0,1,1,1,0,0\n0,1,1,2,1,1,0\n1,1,2,2,1,1,1\n0,1,1,1,1,1,0\n0,0,1,1,1,0,0",
+                    language="text")
+        if files and len(files) > MAX_FILES:
+            st.warning(f"한 번에 {MAX_FILES}장까지만 판정합니다. 앞의 {MAX_FILES}장만 사용합니다.")
+        for f in (files or [])[:MAX_FILES]:
+            m, err = parse_wafer_file(f.getvalue(), f.name, rule, int(pass_bin))
+            if err is None:
+                items.append((f.name, m))
+            else:
+                errors.append((f.name, err))
+
+    elif src_mode == src_opts[1]:
+        if live is None:
+            st.error("unlabeled_samples.joblib이 없습니다. src/13_unlabeled_samples.py를 먼저 실행하세요.")
+            st.stop()
+        lot_dir = os.path.join(BASE, "samples", live["demo_lot"])
+        # 저장소에 있는 CSV를 '파일 올리기'와 똑같은 해석 함수로 읽는다 —
+        # 폰처럼 파일을 끌어다 놓기 어려운 환경에서도 같은 경로를 시연하기 위해서다.
+        for fn in sorted(os.listdir(lot_dir)):
+            with open(os.path.join(lot_dir, fn), "rb") as fh:
+                m, err = parse_wafer_file(fh.read(), fn, RULE_WM)
+            if err is None:
+                items.append((fn, m))
+            else:
+                errors.append((fn, err))
+        st.caption(
+            f"samples/{live['demo_lot']} 폴더 — 25장 전부 라벨이 없는 Lot입니다. 단, 라벨 없는 25장짜리 "
+            "Lot 중 **평균 불량 비율이 높은 것을 시연용으로 고른 것**이라 일반적인 Lot을 대표하지 않습니다."
+        )
+
+    else:
+        if live is None:
+            st.error("unlabeled_samples.joblib이 없습니다. src/13_unlabeled_samples.py를 먼저 실행하세요.")
+            st.stop()
+        pool = live["pool"]
+        c1, c2, c3 = st.columns([2, 1, 1])
+        min_dr = c1.slider("최소 불량 다이 비율", 0.0, 0.8, 0.0, 0.05,
+                           help="0이면 완전 무작위. 올리면 불량이 많은 웨이퍼만 남깁니다.")
+        n_pick = c2.number_input("장수", 1, 25, 6)
+        # 문법 설명: st.session_state
+        # Streamlit은 버튼을 누를 때마다 스크립트를 처음부터 다시 실행해서 일반 변수는
+        # 매번 초기화된다. session_state는 새로고침 전까지 값이 유지되는 저장소라,
+        # '다시 뽑기'를 누른 횟수를 여기에 담아 난수 시드로 쓴다.
+        if "live_seed" not in st.session_state:
+            st.session_state["live_seed"] = 0
+        if c3.button("다시 뽑기"):
+            st.session_state["live_seed"] += 1
+        dr = np.array(pool["defect_ratio"])
+        cand = np.flatnonzero(dr >= min_dr)
+        if len(cand) == 0:
+            st.warning("조건에 맞는 웨이퍼가 없습니다.")
+            st.stop()
+        rng = np.random.default_rng(st.session_state["live_seed"])
+        picks = rng.choice(cand, size=min(int(n_pick), len(cand)), replace=False)
+        items = [(f"{pool['lot'][i]} · slot {pool['wafer_index'][i]}", pool["maps"][i]) for i in picks]
+        st.caption(
+            f"원본 81만 장 중 **라벨이 없는 638,507장**에서 무작위로 뽑아 둔 {len(pool['maps']):,}장 중 "
+            f"조건에 맞는 {len(cand):,}장에서 추출합니다. 원 연구자도 답을 붙이지 않았고, "
+            "12,763장 학습 샘플에도 들어간 적이 없어 5개 모델 모두 처음 보는 웨이퍼입니다."
+        )
+
+    for name, err in errors:
+        st.error(f"**{name}** — {err}")
+    if not items:
+        st.info("판정할 웨이퍼를 넣어주세요.")
+        st.stop()
+
+    # ---- 판정 ----
+    names = [n for n, _ in items]
+    maps = [m for _, m in items]
+    pr = predict_probs(maps, models5)          # (5개 모델, 웨이퍼 수, 9)
+    # 대표 판정은 fold 0 모델로 낸다 — 화면 1과 같은 모델이고, '격차 20%p' 기준의
+    # 오분류율이 이 모델의 검증셋에서 실측돼 있기 때문이다. 나머지 4개는 참고용 일치도.
+    p0 = pr[0]
+    pred = p0.argmax(1)
+    srt = np.sort(p0, axis=1)[:, ::-1]
+    gaps = srt[:, 0] - srt[:, 1]
+    votes = (pr.argmax(2) == pred[None, :]).sum(0)
+    warns = [input_warnings(m, ref) if ref else [] for m in maps]
+    summ = [map_summary(m) for m in maps]
+
+    res = pd.DataFrame({
+        "웨이퍼": names,
+        "원본 크기": [f"{s['shape'][0]}×{s['shape'][1]}" for s in summ],
+        "불량 다이 비율(%)": [s["defect_ratio"] * 100 for s in summ],
+        "판정": [class_names[k] for k in pred],
+        "확률(%)": p0.max(1) * 100,
+        "1-2등 격차(%p)": gaps * 100,
+        "5개 모델 일치": [f"{v}/5" for v in votes],
+        # 기준은 src/14_heldout_eval.py에서 본 적 없는 라벨 웨이퍼로 검증했다 —
+        # 격차 기준만으로는 정상 웨이퍼 오경보를 거의 못 걸러서 만장일치 기준을 더했다.
+        # 입력 경고는 이 기준에 넣지 않는다 — 검증되지 않은 기준을 섞으면 캡션의 수치가 거짓이 된다.
+        "재확인 권장": ["예" if (v < 5 or g < 0.20) else "" for v, g in zip(votes, gaps)],
+        "입력 경고": [f"{len(w)}건" if w else "" for w in warns],
+    })
+
+    st.divider()
+    if len(items) > 1:
+        st.markdown(f"#### 판정 요약 — {len(items)}장")
+        cnt = res["판정"].value_counts()
+        s1, s2 = st.columns([1, 2])
+        with s1:
+            is_def = res["판정"] != "none"
+            k1, k2, k3 = st.columns(3)
+            k1.metric("불량 판정", f"{int(is_def.sum())}장")
+            k2.metric("그중 만장일치", f"{int((is_def & (votes == 5)).sum())}장")
+            k3.metric("재확인 권장", f"{int((res['재확인 권장'] == '예').sum())}장")
+            st.caption(held["flag_caption"] if held is not None else
+                       "재확인 권장 = 5개 모델 만장일치가 아니거나 1-2등 격차 20%p 미만인 웨이퍼")
+        with s2:
+            fig_c = go.Figure(go.Bar(
+                x=cnt.index.tolist(), y=cnt.values,
+                marker_color=["#c9ccd1" if c == "none" else "#c44e52" for c in cnt.index],
+                text=cnt.values, textposition="outside", cliponaxis=False))
+            fig_c.update_layout(height=220, margin=dict(l=10, r=10, t=10, b=10),
+                                yaxis=dict(title="장수"))
+            st.plotly_chart(fig_c, width='stretch', config={"displayModeBar": False})
+
+        st.dataframe(res, hide_index=True, width='stretch', column_config={
+            "불량 다이 비율(%)": st.column_config.NumberColumn(format="%.1f"),
+            "확률(%)": st.column_config.NumberColumn(format="%.1f"),
+            "1-2등 격차(%p)": st.column_config.NumberColumn(format="%.1f"),
+        })
+        st.download_button("판정 결과 CSV 내려받기", res.to_csv(index=False).encode("utf-8-sig"),
+                           file_name="wafer_judgement.csv", mime="text/csv")
+
+        # 넣은 순서대로 격자 — Lot 안에서 같은 판정이 몰리는지 한눈에 보이게
+        with st.expander("웨이퍼 맵 격자로 보기"):
+            _grid([resize_nearest(m, 64) for m in maps],
+                  [class_names[k] for k in pred], [0] * len(maps), cols=5)
+        st.divider()
+
+    sel = st.selectbox(
+        "자세히 볼 웨이퍼", range(len(items)),
+        format_func=lambda i: f"{names[i]} — {class_names[pred[i]]} {p0[i].max()*100:.1f}%"
+                              + ("  (재확인 권장)" if res["재확인 권장"][i] else ""),
+    )
+    m = maps[sel]
+    pred_lab = class_names[pred[sel]]
+
+    d1, d2, d3, d4 = st.columns(4)
+    d1.metric("판정", pred_lab)
+    d2.metric("확률", f"{p0[sel].max()*100:.1f}%")
+    d3.metric("1-2등 격차", f"{gaps[sel]*100:.1f}%p")
+    d4.metric("5개 모델 일치", f"{votes[sel]}/5")
+    for w in warns[sel]:
+        st.warning(w)
+    if votes[sel] < 5:
+        err_txt = ""
+        if held is not None and int(votes[sel]) in held["votes_error"]:
+            err_txt = (f" 본 적 없는 라벨 웨이퍼에서 {votes[sel]}/5 일치였던 판정은 "
+                       f"{held['votes_error'][int(votes[sel])]*100:.0f}%가 오분류였습니다.")
+        st.warning(f"5개 모델 중 {votes[sel]}개만 이 판정에 동의했습니다.{err_txt} 사람이 재확인할 대상입니다.")
+
+    x_t = torch.from_numpy(to_model_input(m)[None, None, :, :])
+    heatmap, _, _ = gradcam.generate(x_t, target_class=int(pred[sel]))
+    img64 = resize_nearest(m, 64)
+    v1, v2, v3 = st.columns(3)
+    with v1:
+        st.plotly_chart(wafer_heatmap_fig(m, f"원본 ({m.shape[0]}×{m.shape[1]})"),
+                        width='stretch', key="live_orig")
+    with v2:
+        st.plotly_chart(wafer_heatmap_fig(img64, "모델이 본 입력 (64×64)"),
+                        width='stretch', key="live_64")
+    with v3:
+        st.plotly_chart(gradcam_fig(img64, heatmap, f"Grad-CAM (근거: {pred_lab})"),
+                        width='stretch', key="live_cam")
+    st.caption(
+        "가운데는 최근접 이웃 방식으로 64×64로 줄인 실제 모델 입력입니다. 원본이 크면 가는 선이 "
+        "끊겨 보일 수 있습니다 — Scratch 성능 한계(F1 0.697)의 원인으로 추정한 바로 그 단계입니다."
+    )
+
+    st.markdown("##### 9개 클래스 전체 예측 확률")
+    fig_p, names_sorted, vals_sorted = prob_bar_fig(p0[sel], pred_lab)
+    st.plotly_chart(fig_p, width='stretch', key="live_prob")
+    n_narrow, err_narrow, err_wide = gap_reference()
+    msg = (f"1등 **{names_sorted[0]}** {vals_sorted[0]*100:.1f}% · "
+           f"2등 **{names_sorted[1]}** {vals_sorted[1]*100:.1f}% · 격차 **{gaps[sel]*100:.1f}%p**")
+    if gaps[sel] < 0.20:
+        st.warning(msg + f" — 격차가 좁습니다. 검증셋에서 이런 웨이퍼는 {err_narrow*100:.0f}%가 "
+                         f"오분류였습니다(넓은 경우 {err_wide*100:.0f}%).")
+    else:
+        st.info(msg)
+    st.caption("라벨이 없는 웨이퍼이므로 정답 막대(초록)는 없고, 이 판정이 맞았는지는 이 화면에서 알 수 없습니다.")
+
+    c_l, c_r = st.columns(2)
+    with c_l:
+        st.markdown("##### 5개 fold 모델의 판정")
+        st.dataframe(pd.DataFrame({
+            "모델": [f"fold {k}" for k in range(5)],
+            "판정": [class_names[pr[k, sel].argmax()] for k in range(5)],
+            "확률(%)": [pr[k, sel].max() * 100 for k in range(5)],
+        }), hide_index=True, width='stretch',
+            column_config={"확률(%)": st.column_config.NumberColumn(format="%.1f")})
+        if held is not None:
+            st.caption(held["votes_caption"])
+        else:
+            st.caption("5개 모델은 서로 다른 80%로 학습됐습니다. 이 일치도가 오분류를 가려내는지는 따로 검증하지 않았습니다.")
+    with c_r:
+        st.markdown("##### 문헌상 공정 모듈")
+        if pred_lab == "none":
+            st.success("정상 판정 — 공정 조치 대상이 아닙니다.")
+        else:
+            mod, cause, action = PROCESS_MAP.get(pred_lab, ("-", "-", "-"))
+            st.markdown(f"**공정 모듈** {mod}\n\n**물리적 원인** {cause}\n\n**점검 방향** {action}")
+            st.caption("근거 문헌과 출처는 '공정 원인 매핑' 화면에 있습니다.")
