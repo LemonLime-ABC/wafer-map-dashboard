@@ -46,8 +46,21 @@ st.set_page_config(
 # --------------------------------------------
 # 데이터·모델 로드 (캐시)
 # --------------------------------------------
+def _file_stamp(*names) -> tuple:
+    """파일들의 수정 시각. 캐시 함수의 인자로 넘겨 '파일이 바뀌면 캐시도 새로' 되게 한다.
+
+    왜 필요한가: @st.cache_resource는 **함수 코드와 인자**가 같으면 옛 결과를 계속 돌려준다.
+    Streamlit Cloud는 GitHub에서 새 파일을 받아와도 서버를 꼭 재시작하지는 않아서,
+    artifacts 파일만 바뀌고 로드 함수 코드가 그대로면 옛 데이터가 남는다. 실제로
+    시연 Lot을 교체했을 때 앱이 지워진 옛 폴더(lot29867)를 찾다가 FileNotFoundError가 났다.
+    """
+    return tuple(os.path.getmtime(os.path.join(ART, n)) if os.path.exists(os.path.join(ART, n)) else 0.0
+                 for n in names)
+
+
+# 인자 이름을 밑줄로 시작하면(_stamp) Streamlit이 캐시 키에서 빼버리므로 반드시 stamp로 쓴다.
 @st.cache_resource
-def load_all():
+def load_all(stamp):
     bundle = joblib.load(os.path.join(ART, "dashboard_bundle.joblib"))
     model = WaferCNN(in_channels=1, n_classes=len(bundle["class_names"]), head="flatten")
     state = torch.load(os.path.join(ART, "model_v2_flatten_fold0.pt"),
@@ -58,9 +71,8 @@ def load_all():
     return bundle, model, gradcam
 
 
-bundle = load_all()[0]
-model = load_all()[1]
-gradcam = load_all()[2]
+_stamp_main = _file_stamp("dashboard_bundle.joblib", "model_v2_flatten_fold0.pt")
+bundle, model, gradcam = load_all(_stamp_main)
 
 class_names = bundle["class_names"]
 wafer_table = bundle["wafer_table"]
@@ -843,7 +855,7 @@ elif page == PAGES[4]:
 # 웨이퍼 맵을 그 자리에서 모델에 통과시킨다. 계산 부분(파일 해석·입력 검사·예측)은
 # src/live_inference.py에 있고, 여기는 화면 배치만 담당한다.
 @st.cache_resource
-def load_live():
+def load_live(stamp):
     models5 = load_fold_models(ART, len(class_names))
     path = os.path.join(ART, "unlabeled_samples.joblib")
     live = joblib.load(path) if os.path.exists(path) else None
@@ -860,7 +872,9 @@ if page == PAGE_LIVE:
         "다른 화면과 달리, 여기서는 넣는 순간 64×64 리사이즈 → CNN → Grad-CAM이 실제로 실행됩니다. "
         "학습 때와 전처리가 같은지는 화면 1의 저장된 확률과 **오차 0으로 일치**하는 것을 확인했습니다."
     )
-    models5, live, held = load_live()
+    models5, live, held = load_live(_file_stamp(
+        "unlabeled_samples.joblib", "heldout_eval.joblib",
+        *[f"model_v2_flatten_fold{k}.pt" for k in range(5)]))
     ref = live["ref"] if live else None
 
     # ---- 이 화면의 판정을 어디까지 믿을 수 있는가 (먼저 보여준다) ----
@@ -908,6 +922,11 @@ if page == PAGE_LIVE:
             st.error("unlabeled_samples.joblib이 없습니다. src/13_unlabeled_samples.py를 먼저 실행하세요.")
             st.stop()
         lot_dir = os.path.join(BASE, "samples", live["demo_lot"])
+        if not os.path.isdir(lot_dir):
+            # 캐시 문제 등으로 기록과 실제 폴더가 어긋나도 앱 전체가 죽지 않게 한다
+            st.error(f"시연 Lot 폴더(samples/{live['demo_lot']})를 찾지 못했습니다. "
+                     "src/13_unlabeled_samples.py로 다시 만들거나 앱을 재시작하세요.")
+            st.stop()
         # 저장소에 있는 CSV를 '파일 올리기'와 똑같은 해석 함수로 읽는다 —
         # 폰처럼 파일을 끌어다 놓기 어려운 환경에서도 같은 경로를 시연하기 위해서다.
         for fn in sorted(os.listdir(lot_dir)):
