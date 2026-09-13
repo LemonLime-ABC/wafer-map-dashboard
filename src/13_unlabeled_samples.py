@@ -105,59 +105,108 @@ print(f"[3] 미라벨 풀 {N_POOL}장 추출 — 불량 다이 비율 중앙값 
 # %% [markdown]
 # ## 끌어다 넣기 시연용 파일 — samples/ 폴더
 #
-# 1. 미라벨 웨이퍼 한 장씩 CSV (0/1/2 격자) — 풀에서 불량 비율 분위수별로 6장
-# 2. Lot 한 통(25장) — 라벨이 하나도 없는 25장짜리 Lot 중 평균 불량 비율이
-#    가장 높은 Lot. **시연 효과를 위해 고른 것**이라 대표성은 없다(화면에도 명시).
-# 3. Bin 코드 형식 예시 — 실제 테스트 장비는 0/1/2가 아니라 bin 번호로 결과를 낸다
-#    (다이 없음=빈칸, Pass=1, Fail=여러 번호). 같은 웨이퍼를 그 형식으로 바꾼 파일.
+# ### 처음 방식과 그 문제 (2026-09-13 교체)
+# 처음엔 풀에서 불량 비율 분위수별로 뽑았더니, 불량 비율이 높은 쪽에 **가로·세로 줄무늬**
+# 웨이퍼(행·열 단위로 통째로 불량)가 걸렸다. 9개 패턴 어디에도 속하지 않는 모양인데 모델은
+# "Random 100%, 5/5 만장일치"로 자신 있게 판정했다 — 닫힌 분류기의 한계를 보여주는 사례지만,
+# 시연 파일로는 적절하지 않았다. Lot도 불량이 30~45% 흩뿌려진 잡음 같은 Lot이 뽑혔다.
+#
+# ### 지금 방식
+# 1. **데이터 특성으로 거른다** (모델 판정은 쓰지 않는다 — 판정으로 고르면 '잘 맞는 것만 골랐다'가 된다)
+#    - 라벨 없음, 배경 비율·불량 비율이 학습 데이터 99% 범위 안, 한 변 25~80칸
+#    - 줄무늬 없음: 다이가 많은 가운데 행/열 중 90% 이상이 불량인 줄이 하나도 없어야 함
+#    - 뚜렷한 덩어리: 테두리 한 줄을 뺀 안쪽에서, 가장 큰 불량 덩어리가 20다이 이상이고
+#      전체 불량의 40% 이상 (테두리를 빼는 이유 — 테두리만 붉은 웨이퍼가 점수를 독차지했다)
+# 2. 걸러진 후보를 **덩어리 위치(중심부/중간/가장자리)와 길쭉함**으로 나눠 그림으로 보고,
+#    **사람이 모양이 서로 다른 것을 골랐다.** 그래서 아래는 목록으로 고정한다.
+#    이 과정은 scratchpad 탐색 스크립트로 했고, 여기서는 고른 결과가 조건을 만족하는지만 다시 검사한다.
+#
+# **시연용으로 고른 것**이라 미라벨 웨이퍼 전체를 대표하지 않는다(화면에도 명시).
+# 미라벨 전체의 무작위 모습은 앱의 '미라벨 웨이퍼 무작위 추출'(위 1,000장 풀)로 본다.
 
 # %%
+from scipy import ndimage   # noqa: E402
+
+SINGLES = [   # (lotName, waferIndex, 눈으로 본 모양 — 모델 판정 아님)
+    ("lot11705", 23, "불량이 거의 없음"),
+    ("lot23658", 3, "중앙 덩어리"),
+    ("lot33059", 23, "고리 모양"),
+    ("lot17175", 5, "중간 위치 덩어리"),
+    ("lot2009", 4, "가장자리 덩어리"),
+    ("lot40273", 8, "가장자리 넓은 덩어리"),
+    ("lot2614", 5, "가장자리 둘레 전반"),
+    ("lot23641", 5, "대각선 긁힘"),
+]
+DEMO_LOT = "lot42002"          # 25장 모두 중앙부에 덩어리 — 화면 3의 Lot 응집도와 같은 이야기
+BIN_SOURCE = ("lot23658", 3)   # Bin 코드 형식 예시로 바꿀 웨이퍼
+S8 = np.ones((3, 3), bool)
+zlo, zhi = ref["zero_frac_q"]
+dhi = ref["defect_ratio_q"][1]
+
+
+def check_demo(m: np.ndarray, need_blob: bool) -> dict:
+    """위 1번 조건을 다시 계산한다. 목록을 손으로 고정했으니, 조건 위반이 섞이지 않았는지 확인용."""
+    die, d = m >= 1, m == 2
+    zf, dr, _ = map_stats(m)
+    rd, rdd = die.sum(1), d.sum(1)
+    cd, cdd = die.sum(0), d.sum(0)
+    rs, cs = rd >= 0.6 * rd.max(), cd >= 0.6 * cd.max()
+    stripes = int(((rdd[rs] / rd[rs]) >= 0.9).sum() + ((cdd[cs] / cd[cs]) >= 0.9).sum())
+    inner = d & ndimage.binary_erosion(die, S8, border_value=0)
+    lab, n = ndimage.label(inner, structure=S8)
+    big = int(np.bincount(lab.ravel())[1:].max()) if n else 0
+    share = big / max(int(inner.sum()), 1)
+    ok = (zlo <= zf <= zhi and dr <= dhi and stripes == 0 and 25 <= min(m.shape) and max(m.shape) <= 80)
+    if need_blob:
+        ok = ok and big >= 20 and share >= 0.4
+    return {"ok": bool(ok), "dr": dr, "stripes": stripes, "big": big}
+
+
 def to_csv(m: np.ndarray, path: Path):
     pd.DataFrame(m).to_csv(path, header=False, index=False)
 
 
-order = np.argsort(pool_stats[:, 1])
-singles = []
-for q in [0.50, 0.90, 0.97, 0.99, 0.995, 0.999]:
-    i = order[int(q * (N_POOL - 1))]
-    name = f"unlabeled_{pool['lot'][i]}_w{pool['wafer_index'][i]:02d}.csv"
-    to_csv(pool["maps"][i], SAMPLES / name)
-    singles.append((name, pool_stats[i, 1]))
+# 예전 시연 파일을 지우고 새로 쓴다 (samples/ 안에는 이 스크립트가 만든 것만 있다)
+import shutil   # noqa: E402
+for old in SAMPLES.iterdir():
+    if old.is_dir():
+        shutil.rmtree(old)
+    else:
+        old.unlink()
+
+by_key = {(l, int(w)): i for i, l, w in zip(unlabeled.index, unlabeled["lotName"], unlabeled["waferIndex"])}
 print("[4] 단일 웨이퍼 CSV")
-for n, r in singles:
-    print(f"    {n}  (불량 다이 비율 {r:.3f})")
+for lot, w, desc in SINGLES:
+    m = unlabeled.at[by_key[(lot, w)], "waferMap"].astype(np.uint8)
+    c = check_demo(m, need_blob=(desc != "불량이 거의 없음"))
+    if not c["ok"]:
+        raise RuntimeError(f"{lot} w{w} 이 조건을 만족하지 않습니다: {c}")
+    name = f"unlabeled_{lot}_w{w:02d}.csv"
+    to_csv(m, SAMPLES / name)
+    print(f"    {name:<30} {m.shape}  불량 {c['dr']*100:4.1f}%  덩어리 {c['big']:>3}다이  ({desc})")
 
-# Lot 한 통 — 25장이 전부 미라벨인 Lot
-# 선정 기준: 25장 **모두** 학습 데이터 범위(배경 비율·불량 다이 비율 99% 구간) 안에 있는
-# Lot 중 평균 불량 비율이 가장 높은 것. 처음엔 범위를 안 봐서 평균 불량 비율 50%짜리
-# 극단 Lot이 뽑혔고, 25장 중 23장이 '학습 범위 밖' 경고를 받아 시연이 되지 않았다.
-# 모델 판정 결과로 고르면 '잘 맞는 것만 골랐다'가 되므로 데이터 특성만으로 고른다.
-lot_sizes = unlabeled.groupby("lotName").size()
-full_lots = lot_sizes[lot_sizes == 25].index
-zlo, zhi = ref["zero_frac_q"]
-dlo, dhi = ref["defect_ratio_q"]
-lot_df = unlabeled[unlabeled["lotName"].isin(full_lots)].copy()
-_st = np.array([map_stats(m) for m in lot_df["waferMap"]], dtype=float)
-lot_df["zf"], lot_df["dr"] = _st[:, 0], _st[:, 1]
-lot_df["in_range"] = lot_df["zf"].between(zlo, zhi) & (lot_df["dr"] <= dhi)
-g = lot_df.groupby("lotName").agg(all_in=("in_range", "all"), dr=("dr", "mean"))
-lot_mean = g[g["all_in"]]["dr"]
-demo_lot = lot_mean.idxmax()
-lot_dir = SAMPLES / demo_lot
+# Lot 한 통 — 원본에 25행이 있고 그중 라벨 있는 행이 0개인지 전체 데이터에서 확인
+lot_all = df[df["lotName"] == DEMO_LOT]
+assert len(lot_all) == 25 and lot_all["failureType_clean"].isna().all(), "시연 Lot이 완전 미라벨이 아닙니다"
+lot_dir = SAMPLES / DEMO_LOT
 lot_dir.mkdir(exist_ok=True)
-lot_rows = unlabeled[unlabeled["lotName"] == demo_lot].sort_values("waferIndex")
+lot_rows = lot_all.sort_values("waferIndex")
+lot_checks = [check_demo(m.astype(np.uint8), need_blob=False) for m in lot_rows["waferMap"]]
+if not all(c["ok"] for c in lot_checks):
+    raise RuntimeError(f"{DEMO_LOT}에 조건 위반 웨이퍼가 있습니다")
 for _, r in lot_rows.iterrows():
-    to_csv(r["waferMap"].astype(np.uint8), lot_dir / f"{demo_lot}_w{int(r['waferIndex']):02d}.csv")
-print(f"[5] Lot 한 통: {demo_lot} ({len(lot_rows)}장, 평균 불량 다이 비율 {lot_mean.max():.3f}) -> {lot_dir.name}/")
+    to_csv(r["waferMap"].astype(np.uint8), lot_dir / f"{DEMO_LOT}_w{int(r['waferIndex']):02d}.csv")
+n_blob = sum(c["big"] >= 20 for c in lot_checks)
+print(f"[5] Lot 한 통: {DEMO_LOT} (25장 전부 미라벨, 덩어리 20다이 이상 {n_blob}장) -> {lot_dir.name}/")
+demo_lot = DEMO_LOT
 
-# Bin 코드 형식 예시 — 불량 다이를 여러 fail bin 번호로 흩어 놓는다
-i = order[int(0.99 * (N_POOL - 1))]
-m = pool["maps"][i]
+# Bin 코드 형식 예시 — 같은 웨이퍼를 테스트 장비 형식으로 바꾼다
+lot, w = BIN_SOURCE
+m = unlabeled.at[by_key[(lot, w)], "waferMap"].astype(np.uint8)
 bins = np.full(m.shape, "", dtype=object)
 bins[m == 1] = "1"
-fail_codes = rng.choice(["3", "5", "7", "12"], size=int((m == 2).sum()))
-bins[m == 2] = fail_codes
-bin_name = f"bincode_example_{pool['lot'][i]}_w{pool['wafer_index'][i]:02d}.csv"
+bins[m == 2] = rng.choice(["3", "5", "7", "12"], size=int((m == 2).sum()))
+bin_name = f"bincode_example_{lot}_w{w:02d}.csv"
 pd.DataFrame(bins).to_csv(SAMPLES / bin_name, header=False, index=False)
 print(f"[6] Bin 코드 형식 예시: {bin_name} (다이 없음=빈칸, Pass=1, Fail=3/5/7/12)")
 
